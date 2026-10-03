@@ -1,5 +1,5 @@
 'use strict';
-/* Glow Base backend — Node >= 22.13, chỉ cần thêm gói `nodemailer` (để gửi email thật). */
+/* Glow Base backend — Node >= 22.13, không cần gói ngoài, không gửi email. */
 const http = require('node:http'), fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { promisify } = require('node:util'), { DatabaseSync } = require('node:sqlite');
 const scrypt = promisify(crypto.scrypt);
@@ -20,7 +20,6 @@ if (PROD && !E.DATA_DIR) console.warn('[CẢNH BÁO] Chưa đặt DATA_DIR → d
 const db = new DatabaseSync(path.join(DATA, 'glowbase.db'));
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS users(email TEXT PRIMARY KEY, name TEXT NOT NULL, pass TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', avatar TEXT, created_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS pending(email TEXT PRIMARY KEY, name TEXT NOT NULL, pass TEXT NOT NULL, code TEXT NOT NULL, exp INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0, sent_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions(tok TEXT PRIMARY KEY, email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE, exp INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS subs(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES users(email), status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', submitted_at INTEGER NOT NULL, reviewed_at INTEGER, data TEXT NOT NULL, mid TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mua_ids(id INTEGER PRIMARY KEY AUTOINCREMENT);
@@ -30,6 +29,12 @@ CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY, mid INTEGER NOT NULL,
 CREATE INDEX IF NOT EXISTS reviews_mid ON reviews(mid);
 CREATE TABLE IF NOT EXISTS removed(mid INTEGER PRIMARY KEY, at INTEGER NOT NULL);`);
 try { db.exec('ALTER TABLE sessions ADD COLUMN max_exp INTEGER'); } catch {} // DB cũ chưa có cột trần 30 ngày
+// Khoá "một email = một tài khoản": Gmail không phân biệt dấu chấm và đuôi +abc (a.b+x@gmail.com = ab@gmail.com), nên chuẩn hoá trước khi so sánh.
+const ekey = e => { e = String(e).trim().toLowerCase(); const m = e.match(/^([^@]+)@(gmail|googlemail)\.com$/); return m ? m[1].split('+')[0].replace(/\./g, '') + '@gmail.com' : e; };
+try { db.exec('ALTER TABLE users ADD COLUMN ekey TEXT'); } catch {} // DB cũ chưa có cột ekey
+for (const r of db.prepare('SELECT email FROM users WHERE ekey IS NULL').all()) db.prepare('UPDATE users SET ekey=? WHERE email=?').run(ekey(r.email), r.email);
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_ekey ON users(ekey)'); }
+catch { console.warn('[CẢNH BÁO] Trong DB đã có 2 tài khoản trùng một Gmail (khác nhau chỗ dấu chấm hoặc đuôi +). Server vẫn chặn đăng ký trùng mới, nhưng hãy xử lý tài khoản cũ.'); }
 if (ADMIN) db.prepare("UPDATE users SET role='admin' WHERE email=?").run(ADMIN);
 const q = s => db.prepare(s);
 
@@ -40,43 +45,12 @@ const hmac = s => crypto.createHmac('sha256', SECRET).update(s).digest('hex');
 const same = (a, b) => a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const hashPw = async p => { const s = crypto.randomBytes(16); return s.toString('hex') + ':' + (await scrypt(p, s, 64)).toString('hex'); };
 const checkPw = async (p, st) => { const [s, h] = st.split(':'); return same((await scrypt(p, Buffer.from(s, 'hex'), 64)).toString('hex'), h); };
-const newCode = () => String(crypto.randomInt(100000, 1000000));
 class HttpErr extends Error { constructor(s, m) { super(m); this.s = s; } }
 const bad = (m, s = 400) => new HttpErr(s, m);
 const hits = new Map();
 const over = (k, max, win) => (hits.get(k) || []).filter(x => now() - x < win).length >= max;
 const hit = k => { const a = (hits.get(k) || []).filter(x => now() - x < 3600e3); a.push(now()); hits.set(k, a); };
-setInterval(() => { const t = now(); for (const [k, a] of hits) if (!a.some(x => t - x < 3600e3)) hits.delete(k); q('DELETE FROM sessions WHERE exp<? OR (max_exp IS NOT NULL AND max_exp<?)').run(t, t); q('DELETE FROM pending WHERE exp<?').run(t - 3600e3); }, 600e3).unref();
-
-// ---- gửi email bằng Resend API ----
-const { Resend } = require('resend');
-const resend = E.RESEND_API_KEY ? new Resend(E.RESEND_API_KEY) : null;
-
-if (!resend && PROD) {
-  console.error('Chế độ production cần RESEND_API_KEY để gửi mã xác minh.');
-  process.exit(1);
-} else if (!resend) {
-  console.warn('[dev] Chưa có RESEND_API_KEY: Mã xác minh chỉ được in ra console server.');
-}
-
-async function sendCode(to, code) {
-  if (!resend) {
-    console.log(`[dev] Mã xác minh cho ${to}: ${code}`);
-    return;
-  }
-  try {
-    const { error } = await resend.emails.send({
-      from: 'Glow Base <onboarding@resend.dev>',
-      to: [to],
-      subject: `Mã xác minh Glow Base: ${code}`,
-      html: `<p>Mã xác minh Glow Base của bạn là: <strong>${code}</strong></p><p>Mã có hiệu lực trong 5 phút.</p>`
-    });
-    if (error) throw error;
-  } catch (e) {
-    console.error('Gửi mail lỗi:', e.message || e);
-    throw bad('Chưa gửi được email xác minh, vui lòng thử lại sau.', 502);
-  }
-}
+setInterval(() => { const t = now(); for (const [k, a] of hits) if (!a.some(x => t - x < 3600e3)) hits.delete(k); q('DELETE FROM sessions WHERE exp<? OR (max_exp IS NOT NULL AND max_exp<?)').run(t, t); }, 600e3).unref();
 
 // ---- làm sạch dữ liệu (chống XSS: giao diện render HTML thô nên server phải escape) ----
 const unesc = s => String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
@@ -179,38 +153,18 @@ route('GET', '/api/boot', ({ u }) => { // người dùng hiện tại + hồ sơ
   const live = liveCheck(), reviews = q('SELECT r.*, x.name AS owner_name FROM reviews r JOIN users x ON x.email=r.owner ORDER BY r.id').all().filter(r => live(r.mid)).map(r => revOut(r, u));
   return { user: u ? pubUser(u) : null, subs: rows.map(r => subOut(r, u)), idleMs: IDLE, favs: u ? favsOf(u.email) : [], reviews, removed: [...removedSet()] }; });
 
-route('POST', '/api/auth/register/start', async ({ body, ip }) => {
+route('POST', '/api/auth/register', async ({ res, body, ip }) => {
   const name = txt(body.name, 2, 60, 'Tên hiển thị'), email = String(body.email || '').trim().toLowerCase(), pw = String(body.password || '');
   if (!GMAIL.test(email) || email.includes('..')) throw bad('Vui lòng nhập địa chỉ Gmail hợp lệ (dạng tenban@gmail.com).');
   if (pw.length < 8 || pw.length > 128 || !/[A-Za-z]/.test(pw) || !/\d/.test(pw)) throw bad('Mật khẩu cần ít nhất 8 ký tự, gồm cả chữ và số.');
   if (over('reg:' + ip, 10, 3600e3) || over('regm:' + email, 5, 3600e3)) throw bad('Bạn thao tác quá nhiều lần, hãy thử lại sau.', 429);
   hit('reg:' + ip); hit('regm:' + email);
-  if (q('SELECT 1 FROM users WHERE email=?').get(email)) throw bad('Gmail này đã được đăng ký.', 409);
-  const p = q('SELECT sent_at FROM pending WHERE email=?').get(email); if (p && now() - p.sent_at < 60e3) throw bad('Vui lòng đợi 60 giây trước khi gửi lại mã.', 429);
-  const code = newCode(); await sendCode(email, code);
-  q('INSERT OR REPLACE INTO pending VALUES(?,?,?,?,?,0,?)').run(email, name, await hashPw(pw), hmac(email + ':' + code), now() + 300e3, now());
-  return { ok: true }; });
-
-route('POST', '/api/auth/register/resend', async ({ body, ip }) => {
-  const email = String(body.email || '').trim().toLowerCase(), p = q('SELECT * FROM pending WHERE email=?').get(email);
-  if (!p) throw bad('Chưa có yêu cầu đăng ký. Hãy đăng ký lại.');
-  if (now() - p.sent_at < 60e3) throw bad('Vui lòng đợi 60 giây trước khi gửi lại mã.', 429);
-  if (over('regm:' + email, 5, 3600e3) || over('reg:' + ip, 10, 3600e3)) throw bad('Bạn thao tác quá nhiều lần, hãy thử lại sau.', 429);
-  hit('regm:' + email); hit('reg:' + ip);
-  const code = newCode(); await sendCode(email, code);
-  q('UPDATE pending SET code=?, exp=?, tries=0, sent_at=? WHERE email=?').run(hmac(email + ':' + code), now() + 300e3, now(), email);
-  return { ok: true }; });
-
-route('POST', '/api/auth/register/verify', async ({ res, body, ip }) => {
-  const email = String(body.email || '').trim().toLowerCase(), code = String(body.code || '');
-  if (over('ver:' + ip, 30, 900e3)) throw bad('Bạn thao tác quá nhiều lần, hãy thử lại sau.', 429); hit('ver:' + ip);
-  const p = q('SELECT * FROM pending WHERE email=?').get(email); if (!p) throw bad('Chưa có yêu cầu đăng ký. Hãy đăng ký lại.');
-  if (now() > p.exp) throw bad('Mã đã hết hạn. Hãy bấm “Gửi lại mã”.');
-  if (p.tries >= 5) throw bad('Bạn đã nhập sai quá 5 lần. Hãy bấm “Gửi lại mã” để nhận mã mới.', 429);
-  if (!/^\d{6}$/.test(code)) throw bad('Mã xác minh gồm đúng 6 chữ số.');
-  if (!same(hmac(email + ':' + code), p.code)) { q('UPDATE pending SET tries=tries+1 WHERE email=?').run(email); throw bad(`Mã không đúng. Bạn còn ${4 - p.tries} lần thử.`); }
-  try { q('INSERT INTO users VALUES(?,?,?,?,NULL,?)').run(email, p.name, p.pass, email === ADMIN ? 'admin' : 'user', now()); } catch { throw bad('Gmail này đã được đăng ký.', 409); }
-  q('DELETE FROM pending WHERE email=?').run(email); startSession(res, email);
+  const k = ekey(email), taken = () => bad('Gmail này đã được đăng ký.', 409);
+  // Không còn xác minh email nên KHÔNG cho đăng ký bằng ADMIN_EMAIL (tránh bị chiếm quyền admin); tài khoản admin tạo từ ADMIN_PASSWORD lúc khởi động.
+  if (ADMIN && k === ekey(ADMIN)) throw taken();
+  if (q('SELECT 1 FROM users WHERE ekey=? OR email=?').get(k, email)) throw taken();
+  try { q('INSERT INTO users(email,name,pass,role,avatar,created_at,ekey) VALUES(?,?,?,?,NULL,?,?)').run(email, name, await hashPw(pw), 'user', now(), k); } catch { throw taken(); }
+  startSession(res, email);
   return { user: pubUser(q('SELECT * FROM users WHERE email=?').get(email)) }; });
 
 route('POST', '/api/auth/login', async ({ res, body, ip }) => {
@@ -346,4 +300,13 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(s, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: s === 500 ? 'Lỗi máy chủ.' : e.message }));
   }
 });
-server.listen(PORT, '0.0.0.0', () => console.log(`Glow Base running on port ${PORT}`));
+// Tài khoản admin: tạo từ ADMIN_EMAIL + ADMIN_PASSWORD (chỉ tạo nếu chưa có; sau đó đổi mật khẩu trong giao diện thì không bị ghi đè).
+(async () => {
+  if (!ADMIN) return;
+  if (!q('SELECT 1 FROM users WHERE email=?').get(ADMIN)) {
+    const ap = E.ADMIN_PASSWORD || '';
+    if (ap.length >= 8) { q('INSERT INTO users(email,name,pass,role,avatar,created_at,ekey) VALUES(?,?,?,?,NULL,?,?)').run(ADMIN, 'Admin', await hashPw(ap), 'admin', now(), ekey(ADMIN)); console.log('Đã tạo tài khoản admin:', ADMIN); }
+    else console.warn('[CẢNH BÁO] Chưa có tài khoản admin. Đặt ADMIN_PASSWORD (từ 8 ký tự) trong .env/Variables rồi khởi động lại để tạo.');
+  }
+})().catch(e => console.error('Lỗi tạo admin:', e.message));
+server.listen(PORT, () => console.log(`Glow Base chạy tại http://localhost:${PORT}  (dữ liệu: ${DATA})`));

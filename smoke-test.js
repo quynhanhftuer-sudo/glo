@@ -1,24 +1,24 @@
 // Chạy: npm test  — tự bật server tạm (port 3999, DB tạm, phiên hết hạn sau 4 giây không thao tác), thử toàn bộ luồng chính.
 const { spawn } = require('node:child_process'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-')), B = 'http://localhost:3999';
-const srv = spawn(process.execPath, ['server.js'], { cwd: __dirname, env: { ...process.env, PORT: 3999, DATA_DIR: dir, NODE_ENV: 'development', SMTP_USER: '', SMTP_PASS: '', ADMIN_EMAIL: 'admin.glow@gmail.com', SESSION_IDLE_SEC: 4 } });
+const srv = spawn(process.execPath, ['server.js'], { cwd: __dirname, env: { ...process.env, PORT: 3999, DATA_DIR: dir, NODE_ENV: 'development', ADMIN_EMAIL: 'admin.glow@gmail.com', ADMIN_PASSWORD: 'Admin12345', SESSION_IDLE_SEC: 4 } });
 let log = ''; srv.stdout.on('data', d => log += d); srv.stderr.on('data', () => {});
-const code = em => { const m = [...log.matchAll(new RegExp(`Mã xác minh cho ${em.replace('.', '\\.')}: (\\d{6})`, 'g'))]; return m.at(-1)[1]; };
 class Jar { c = ''; async call(m, u, b) { const r = await fetch(B + u, { method: m, headers: { ...(b ? { 'Content-Type': 'application/json' } : {}), cookie: this.c }, body: b && JSON.stringify(b) }); const s = r.headers.getSetCookie?.()[0]; if (s) this.c = s.split(';')[0]; return { s: r.status, j: await r.json().catch(() => ({})) }; } }
 const JPG = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.alloc(200, 1)]).toString('base64');
 const sub = (o = {}) => ({ data: { name: 'Ngọc Anh <b>MUA</b>', bio: '<img src=x onerror=alert(1)>', type: 'Tại gia', svc: 'home', province: 'Hà Nội', address: '12 Trần Duy Hưng, Cầu Giấy', avatar: '', contacts: [{ type: 'phone', label: '0912 345 678', href: 'tel:0912345678' }], concepts: [{ concept: 'Cô dâu', lo: 1500000, hi: 3000000, photos: [JPG] }], ...o } });
-async function reg(j, em, pw = 'Matkhau123') { assert.equal((await j.call('POST', '/api/auth/register/start', { name: 'Test', email: em, password: pw })).s, 200); const r = await j.call('POST', '/api/auth/register/verify', { email: em, code: code(em) }); assert.equal(r.s, 200); return r.j.user; }
+async function reg(j, em, pw = 'Matkhau123') { const r = await j.call('POST', '/api/auth/register', { name: 'Test', email: em, password: pw }); assert.equal(r.s, 200); return r.j.user; }
 (async () => {
   for (let i = 0; i < 50; i++) { try { await fetch(B + '/api/health'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
   const A = new Jar(), U = new Jar(), P = new Jar();
-  assert.equal((await A.call('POST', '/api/auth/register/start', { name: 'x', email: 'bad@yahoo.com', password: 'Matkhau123' })).s, 400, 'chỉ nhận Gmail');
-  assert.equal((await A.call('POST', '/api/auth/register/start', { name: 'x', email: 'abcde1@gmail.com', password: 'short' })).s, 400, 'mật khẩu yếu');
-  assert.equal((await A.call('POST', '/api/auth/register/start', { name: 'Admin', email: 'admin.glow@gmail.com', password: 'Matkhau123' })).s, 200);
-  const wrong = await A.call('POST', '/api/auth/register/verify', { email: 'admin.glow@gmail.com', code: '000000' }); assert.equal(wrong.s, 400);
-  assert.equal((await A.call('POST', '/api/auth/register/verify', { email: 'admin.glow@gmail.com', code: code('admin.glow@gmail.com') })).j.user.role, 'admin');
-  assert.equal((await U.call('POST', '/api/auth/register/start', { name: 'Linh', email: 'linh.mua@gmail.com', password: 'Matkhau123' })).s, 200);
-  assert.equal((await U.call('POST', '/api/auth/register/resend', { email: 'linh.mua@gmail.com' })).s, 429, 'chờ 60s mới gửi lại');
-  assert.equal((await U.call('POST', '/api/auth/register/verify', { email: 'linh.mua@gmail.com', code: code('linh.mua@gmail.com') })).j.user.role, 'user');
+  assert.equal((await A.call('POST', '/api/auth/register', { name: 'x', email: 'bad@yahoo.com', password: 'Matkhau123' })).s, 400, 'chỉ nhận Gmail');
+  assert.equal((await A.call('POST', '/api/auth/register', { name: 'x', email: 'abcde1@gmail.com', password: 'short' })).s, 400, 'mật khẩu yếu');
+  // không đăng ký được bằng ADMIN_EMAIL (kể cả biến thể dấu chấm / đuôi +), admin đăng nhập bằng ADMIN_PASSWORD
+  for (const em of ['admin.glow@gmail.com', 'adminglow@gmail.com', 'ad.min.glow+x@gmail.com']) assert.ok([400, 409].includes((await A.call('POST', '/api/auth/register', { name: 'Kẻ giả', email: em, password: 'Matkhau123' })).s), 'chặn chiếm email admin: ' + em);
+  assert.equal((await A.call('POST', '/api/auth/login', { identifier: 'admin.glow@gmail.com', password: 'Admin12345' })).j.user.role, 'admin');
+  assert.equal((await U.call('POST', '/api/auth/register', { name: 'Linh', email: 'linh.mua@gmail.com', password: 'Matkhau123' })).j.user.role, 'user', 'đăng ký xong vào luôn, không cần mã');
+  // một email = một tài khoản (Gmail bỏ qua dấu chấm, đuôi +, hoa/thường, googlemail)
+  for (const em of ['linh.mua@gmail.com', 'LINH.MUA@gmail.com', 'linhmua@gmail.com', 'li.nh.mua@gmail.com', 'linh.mua+abc@gmail.com']) assert.ok([400, 409].includes((await new Jar().call('POST', '/api/auth/register', { name: 'Trùng', email: em, password: 'Matkhau123' })).s), 'trùng email: ' + em);
+  assert.equal((await new Jar().call('POST', '/api/auth/register/verify', { email: 'linh.mua@gmail.com', code: '123456' })).s, 404, 'không còn API mã xác minh');
   assert.equal((await new Jar().call('POST', '/api/auth/login', { identifier: 'linh.mua@gmail.com', password: 'sai' })).s, 401);
   assert.equal((await new Jar().call('POST', '/api/submissions', sub())).s, 401, 'phải đăng nhập');
   let r = await U.call('POST', '/api/submissions', sub()); assert.equal(r.s, 200); const id = r.j.sub.id;

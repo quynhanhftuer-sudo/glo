@@ -2,15 +2,7 @@
   "name": "glowbase",
   "version": "1.0.0",
   "private": true,
-  "engines": {
-    "node": ">=22.13"
-  },
-  "scripts": {
-    "start": "node server.js",
-    "test": "node smoke-test.js"
-  },
-  "dependencies": {
-    "nodemailer": "^6.9.14",
-    "resend": "^6.32.0"
-  }
+  "engines": { "node": ">=22.13" },
+  "scripts": { "start": "node server.js", "test": "node smoke-test.js" },
+  "dependencies": {}
 }

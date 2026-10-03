@@ -3,15 +3,15 @@
 ## Chạy thử trên máy (5 phút)
 1. Cài Node.js 22.13 trở lên (nodejs.org).
 2. `npm install`
-3. Sao chép `.env.example` thành `.env`, điền `SMTP_USER` / `SMTP_PASS` (Gmail + Mật khẩu ứng dụng) và `ADMIN_EMAIL`.
+3. Sao chép `.env.example` thành `.env`, điền `ADMIN_EMAIL` và `ADMIN_PASSWORD` (từ 8 ký tự).
 4. `npm start` → mở http://localhost:3000
-5. Đăng ký bằng đúng Gmail ghi ở `ADMIN_EMAIL` → tài khoản đó tự có quyền Admin (menu avatar → Quản trị).
+5. Đăng nhập bằng `ADMIN_EMAIL` + `ADMIN_PASSWORD` → có quyền Admin (menu avatar → Quản trị). Không thể đăng ký tài khoản admin bằng form.
 
-Chưa điền SMTP thì khi chạy thử, mã xác minh chỉ in ra cửa sổ terminal của server (không hiện trên web, không gửi mail).
+Đăng ký không cần mã xác minh email; mỗi Gmail chỉ tạo được một tài khoản (Gmail bỏ qua dấu chấm và chữ hoa/thường: `a.b@gmail.com` và `ab@gmail.com` là một).
 
 ## Đưa lên mạng
 Frontend và backend chạy chung một server (`public/index.html`), nên không cần CORS. Dùng Render / Railway / Fly.io / VPS:
-- Start command: `npm start`; đặt `NODE_ENV=production`, `TRUST_PROXY=1`, `ADMIN_EMAIL`, `SMTP_*` trong phần Environment.
+- Start command: `npm start`; đặt `NODE_ENV=production`, `TRUST_PROXY=1`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` trong phần Environment.
 - **Bắt buộc gắn ổ đĩa bền vững** (Persistent Disk / Volume) và trỏ `DATA_DIR` vào đó, nếu không database và ảnh sẽ mất mỗi lần deploy.
 - Phải dùng HTTPS (các nền tảng trên đều có sẵn).
 

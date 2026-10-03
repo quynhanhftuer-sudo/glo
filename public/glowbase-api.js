@@ -71,7 +71,7 @@
   };
   window.logout = async () => { ls.del(WAS); try { await api('POST', '/api/auth/logout', {}); } catch {} ls.del('gb_subs_v4'); await boot(); toast('Đã đăng xuất'); go('home'); };
 
-  /* ---- đăng ký Gmail + mã xác minh gửi qua email thật ---- */
+  /* ---- đăng ký Gmail (không cần mã xác minh; mỗi Gmail chỉ một tài khoản) ---- */
   window.regSend = async () => {
     const g = id => document.getElementById(id), v = id => g(id).value.trim(); let ok = true; const bad = (id, m) => { jerr(g(id), m); ok = false; };
     ['regName', 'regEmail', 'regPass', 'regPass2'].forEach(i => jerr(g(i), ''));
@@ -81,29 +81,8 @@
     if (pass.length < 8 || !/[A-Za-z]/.test(pass) || !/\d/.test(pass)) bad('regPass', 'Mật khẩu cần ít nhất 8 ký tự, gồm cả chữ và số.');
     if (p2 !== pass) bad('regPass2', 'Mật khẩu xác nhận không khớp.');
     if (!ok) return;
-    try { await api('POST', '/api/auth/register/start', { name, email, password: pass }); REG = { name, email, sentAt: Date.now() }; regVerifyForm(); }
+    try { await api('POST', '/api/auth/register', { name, email, password: pass }); REG = null; closeModal(); await boot(); if (!currentUser) return toast('Tài khoản đã tạo nhưng trình duyệt không giữ được phiên (cookie bị chặn, hoặc trang chạy qua http thay vì https).'); toast('Tạo tài khoản thành công ✨'); afterLogin(); }
     catch (e) { jerr(g('regEmail'), e.message); }
-  };
-  window.regVerifyForm = () => {
-    const r = REG;
-    regShell(`<div class="sub">Nhập mã xác minh đã gửi tới<br><b>${esc(r.email)}</b></div>
-<div class="sub" style="font-size:13px">Hãy kiểm tra hộp thư Gmail (cả mục Spam). Mã có hiệu lực trong 5 phút.</div>
-<label>Mã gồm 6 chữ số</label><input type="text" id="regCode" class="code-in" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="one-time-code" oninput="this.value=this.value.replace(/\\D/g,'')" onkeydown="if(event.key==='Enter')regVerify()">
-<button class="btn btn-primary" onclick="regVerify()">Xác minh & tạo tài khoản</button>
-<div style="display:flex;justify-content:space-between;margin-top:14px"><button class="reg-link" onclick="regForm()">← Đổi Gmail</button><button class="reg-link" id="regResend" onclick="regResend()" disabled></button></div>`);
-    clearInterval(REGT);
-    const tick = () => { const b = document.getElementById('regResend'); if (!b) { clearInterval(REGT); return; } const left = Math.ceil((REG.sentAt + 60e3 - Date.now()) / 1000); b.disabled = left > 0; b.textContent = left > 0 ? `Gửi lại mã sau ${left}s` : 'Gửi lại mã'; };
-    tick(); REGT = setInterval(tick, 1000);
-  };
-  window.regResend = async () => {
-    if (!REG || Date.now() - REG.sentAt < 60e3) return;
-    try { await api('POST', '/api/auth/register/resend', { email: REG.email }); REG.sentAt = Date.now(); regVerifyForm(); toast('Đã gửi lại mã mới ✨'); } catch (e) { fail(e); }
-  };
-  window.regVerify = async () => {
-    const el = document.getElementById('regCode'), c = el.value.trim(); if (!REG) return regForm();
-    if (!/^\d{6}$/.test(c)) return jerr(el, 'Mã xác minh gồm đúng 6 chữ số.');
-    try { await api('POST', '/api/auth/register/verify', { email: REG.email, code: c }); REG = null; clearInterval(REGT); closeModal(); await boot(); if (!currentUser) return toast('Tài khoản đã tạo nhưng trình duyệt không giữ được phiên (cookie bị chặn, hoặc trang chạy qua http thay vì https).'); toast('Xác minh thành công, tài khoản đã tạo ✨'); afterLogin(); }
-    catch (e) { jerr(el, e.message); }
   };
 
   /* ---- hồ sơ MUA: gửi lên server (ảnh được server lưu thành file) ---- */
